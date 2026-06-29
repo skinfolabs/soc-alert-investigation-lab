@@ -1,4 +1,4 @@
-# Quishing - SOC Alert Investigation Lab
+# SOC Alert Investigation Lab
 
 ![Category](https://img.shields.io/badge/Category-SOC%20Investigation-blue)
 ![Platform](https://img.shields.io/badge/Platform-FortiGate%20%7C%20Microsoft%20Sentinel-lightgrey)
