@@ -1,4 +1,4 @@
-# SOC Alert Investigation Lab
+# SOC Alerts Investigation Lab
 
 ![Category](https://img.shields.io/badge/Category-SOC%20Investigation-blue)
 ![Platform](https://img.shields.io/badge/Platform-FortiGate%20%7C%20Microsoft%20Sentinel-lightgrey)
