@@ -2,7 +2,7 @@
 
 ## QR Redirect Flow
 
-The QR investigation used Any.Run/sandbox evidence and PCAP review to validate the destination reached after scanning the code. The alert was worth investigating because QR codes hide the destination from the user, and the first decoded URL used an intermediate QR redirect service.
+Any.Run/sandbox evidence and PCAP review were used to validate the QR destination. The alert was worth triage because the QR code hid the destination and first resolved through an intermediate redirect service.
 
 | Stage | Evidence | Assessment |
 |-------|----------|------------|
@@ -14,7 +14,7 @@ The QR investigation used Any.Run/sandbox evidence and PCAP review to validate t
 
 ## PCAP Indicators
 
-The packet capture supports the same redirect story. DNS and TLS metadata show Me-QR, advertising/measurement infrastructure, and then Facebook/Meta infrastructure.
+The packet capture supports the same redirect path: Me-QR, advertising/measurement infrastructure, then Facebook/Meta infrastructure.
 
 | Indicator | Role |
 |-----------|------|
@@ -28,6 +28,4 @@ The packet capture supports the same redirect story. DNS and TLS metadata show M
 
 ## Analyst Conclusion
 
-The evidence supports a false-positive disposition for confirmed phishing. The QR code is suspicious as a delivery mechanism, and the sender formatting should be reviewed, but the observed path does not show a fake login page, malware download, or credential-harvesting domain.
-
-The remaining validation should focus on full email headers, sender confirmation, and mail-gateway click telemetry. A man-in-the-middle scenario is not supported by the current evidence because the observed network flow reaches expected Facebook and Meta infrastructure.
+The evidence supports false positive for confirmed phishing. The QR delivery method and sender formatting deserved review, but the observed path does not show a fake login page, malware download, or credential-harvesting domain. Remaining checks: full headers, sender confirmation, and mail-gateway click telemetry.

